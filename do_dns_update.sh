@@ -1,16 +1,18 @@
 #!/bin/bash
-# @requires awk, curl, grep, mktemp, sed, tr.
+# @requires awk, curl, grep, sed, tr.
 
 ## START EDIT HERE.
 do_access_token="";
+ip6_interface="enp1s0";
 curl_timeout="15";
 loop_max_records="50";
 url_do_api="https://api.digitalocean.com/v2";
-url_ext_ip="http://checkip.dyndns.org";
+url_ext_ip="http://ipv4.icanhazip.com";
 url_ext_ip2="http://ifconfig.me/ip";
 update_only=false;
 verbose=true;
 filename="$(basename $BASH_SOURCE)";
+tmpfile="/tmp/digital_ocean_records_";
 ## END EDIT.
 
 # get options.
@@ -29,8 +31,13 @@ while getopts "ush" opt; do
       echo "  -u      Updates only. Don't add non-existing";
       echo "  -s      Silent mode. Don't output anything";
       echo "Example:";
-      echo "  Add/Update nas.mydomain.com DNS A record with current public IP";
+      echo "  Add/Update nas.mydomain.com DNS A and AAAA record with current";
+      echo "  public IPv4 and global IPv6 address";
       echo "    ./$filename -s nas mydomain.com";
+      echo;
+      echo "Example 2:";
+      echo "  Add/Update Default A and AAAA record with current IPv4 and IPv6";
+      echo "    ./$filename -u @ mydomain.com";
       echo;
       exit 0;
       ;;
@@ -50,6 +57,8 @@ if [ $# -lt 2 ] || [ -z "$do_record" ] || [ -z "$do_domain" ] ; then
   exit 1;
 fi
 
+tmpfile="${tmpfile}${do_record}.txt";
+
 echov()
 {
   if [ $verbose == true ] ; then
@@ -66,7 +75,7 @@ json_value()
 {
   local KEY=$1
   local num=$2
-  awk -F"[,:}]" '{for(i=1;i<=NF;i++){if($i~/\042'$KEY'\042/){print $(i+1)}}}' | tr -d '"' | sed -n "$num"p
+  awk -F"(\":)|([,}])" '{for(i=1;i<=NF;i++)if($i~/\042'$KEY'/){print $(i+1)}}' | tr -d '"' | sed -n "$num"p
 }
 
 get_external_ip()
@@ -82,10 +91,23 @@ get_external_ip()
   fi
 }
 
+get_global_ip6()
+{
+  ip6_address="$(ip addr show $ip6_interface | grep 'inet6' | grep -v 'fe80' | awk '{ print $2}' | sed 's/\/.*$//')";
+  if [ -z "$ip6_address" ] ; then
+    return 1;
+  else
+    return 0;
+  fi
+}
+
 # https://developers.digitalocean.com/#list-all-domain-records
 get_record()
 {
-  local tmpfile="$(mktemp)";
+  declare -A tmp_record;
+  local success_v4=false;
+  local success_v6=false;
+
   curl -s --connect-timeout "$curl_timeout" -H "Authorization: Bearer $do_access_token" -X GET "$url_do_api/domains/$do_domain/records" > "$tmpfile"
   if [ ! -s "$tmpfile" ] ; then
     return 1;
@@ -98,20 +120,34 @@ get_record()
 
   for (( i=1; i<="$do_num_records"; i++ ))
   do
-    record['name']="$(json_value name $i < $tmpfile)";
-    if [ "${record[name]}" == "$do_record" ] ; then
-      record['id']="$(json_value id $i < $tmpfile)";
-      record['data']="$(json_value data $i < $tmpfile)";
+    tmp_record['name']="$(json_value name $i < $tmpfile)";
+    tmp_record['type']="$(json_value type $i < $tmpfile)";
 
-      if [ ! -z "${record[id]}" ] && [[ "${record[id]}" =~ ^[0-9]+$ ]] ; then
-        rm -f "$tmpfile";
-        return 0;
+    if [ "${tmp_record[name]}" == "$do_record" ] && [ "${tmp_record[type]}" == "AAAA" ]; then
+      recordv6['name']="${tmp_record[name]}";
+      recordv6['type']="${tmp_record[type]}";
+      recordv6['id']="$(json_value id $i < $tmpfile)";
+      recordv6['data']="$(json_value data $i < $tmpfile)";
+
+      if [ ! -z "${recordv6[id]}" ] && [[ "${recordv6[id]}" =~ ^[0-9]+$ ]] ; then
+	success_v6=true;
       fi
-      break;
+    elif [ "${tmp_record[name]}" == "$do_record" ] && [ "${tmp_record[type]}" == "A" ]; then
+      recordv4['name']="${tmp_record[name]}";
+      recordv4['type']="${tmp_record[type]}";
+      recordv4['id']="$(json_value id $i < $tmpfile)";
+      recordv4['data']="$(json_value data $i < $tmpfile)";
+
+      if [ ! -z "${recordv4[id]}" ] && [[ "${recordv4[id]}" =~ ^[0-9]+$ ]] ; then
+        success_v4=true;
+      fi
+    fi
+    
+    if [ "${success_v4}" == true ] && [ "${success_v6}" == true ] ; then
+      return 0;
     fi
   done
 
-  rm -f "$tmpfile";
   return 1;
 }
 
@@ -133,8 +169,9 @@ set_record_ip()
 new_record()
 {
   local ip=$1
+  local record=$2  # record "A" for IPv4 or "AAAA" for IPv6
 
-  local data=`curl -s --connect-timeout $curl_timeout -H "Content-Type: application/json" -H "Authorization: Bearer $do_access_token" -X POST "$url_do_api/domains/$do_domain/records" -d'{"name":"'"$do_record"'","data":"'"$ip"'","type":"A"}'`;
+  local data=`curl -s --connect-timeout $curl_timeout -H "Content-Type: application/json" -H "Authorization: Bearer $do_access_token" -X POST "$url_do_api/domains/$do_domain/records" -d'{"name":"'"$do_record"'","data":"'"$ip"'","type":"'"$record"'"}'`;
   if [ -z "$data" ] || [[ "$data" != *"data\":\"$ip"* ]]; then
     return 1;
   else
@@ -143,7 +180,9 @@ new_record()
 }
 
 # start.
-echov "* Updating %s.%s: $(date +"%Y-%m-%d %H:%M:%S")\n\n" "$do_record" "$do_domain";
+echov "===============================================================";
+echov "* Updating $do_record.$do_domain: $(date +"%Y-%m-%d %H:%M:%S")";
+
 
 echov "* Fetching external IP from: $url_ext_ip";
 get_external_ip;
@@ -152,39 +191,111 @@ if [ $? -ne 0 ] ; then
   exit 1;
 fi
 
-echov "* Fetching Record ID for: $do_record";
-just_added=false;
-declare -A record;
+echov "* Fetching global IPv6 from interface: $ip6_interface";
+get_global_ip6 "$ip6_interface";
+if [ $? -ne 0 ] ; then
+  echov "Unable to extract global IPv6 address";
+  exit 1;
+fi
+
+touch ${tmpfile};
+if [ ! -f ${tmpfile} ] ; then
+  echov "Cannot create temporary record file! Exiting.";
+  exit 1;
+fi
+
+just_added=0;
+just_added_v4=false;
+just_added_v6=false;
+update_required_v4=true;
+update_required_v6=true;
+update_failed_v4=false;
+update_failed_v6=false;
+declare -A recordv4;
+declare -A recordv6;
+
+echov "* Fetching Record ID for: ${do_record}.${do_domain}";
 get_record;
+
 if [ $? -ne 0 ] ; then
   if [ $update_only == true ] ; then
-    echov "Unable to find requested record in DO account";
-    exit 1;
+    echov "Unable to find requested record in Digital-Ocean account";
+    update_required_v4=false;
+    update_required_v6=false;
   else
-    echov "* No record found. Adding: $do_record";
-    new_record "$ip_address";
-    if [ $? -ne 0 ] ; then
-      echov "Unable to add new record";
-      exit 1;
+    echov "* At least one record missing! Adding missing record...";
+    if [ -z "${recordv4[id]}" ] ; then
+      new_record "$ip_address" "A";
+      if [ $? -ne 0 ] ; then
+        echov "Unable to add new IPv4 record";
+      else
+	echov "Successfully added new IPv4 record";
+        just_added=$((just_added+1));
+	just_added_v4=true;
+	update_required_v4=false;
+      fi
     fi
-    just_added=true;
+
+    if [ -z "${recordv6[id]}" ] ; then
+      new_record "$ip6_address" "AAAA";
+      if [ $? -ne 0 ] ; then
+        echov "Unable to add new IPv6 record";
+      else
+	echov "Successfully added new IPv6 record";
+        just_added=$((just_added+1));
+	just_added_v6=true;
+	update_required_v6=false;
+      fi
+    fi
   fi
 fi
 
-if [ $update_only == true ] || [ $just_added != true ] ; then
-  echov "* Comparing ${record[data]} to $ip_address";
-  if [ "${record[data]}" == "$ip_address" ] ; then
-    echov "Record $do_record.$do_domain already set to $ip_address";
-    exit 1;
+if [ $update_only == true ] || [ $just_added -le 1 ] ; then
+
+  if [ $update_required_v4 == true ] && [ ! -z "${recordv4[id]}" ] && [[ "${recordv4[id]}" =~ ^[0-9]+$ ]]; then 
+      echov "* Comparing >> ${recordv4[type]} | ${recordv4[data]} << to $ip_address";
+      if [ "${recordv4[data]}" == "$ip_address" ] ; then
+        echov "Record >>A<< already set to $ip_address";
+        update_required_v4=false;
+      fi
+  fi
+  if [ $update_required_v6 == true ] && [ ! -z "${recordv6[id]}" ] && [[ "${recordv6[id]}" =~ ^[0-9]+$ ]]; then
+      echov "* Comparing >> ${recordv6[type]} | ${recordv6[data]} << to $ip6_address";
+      if [ "${recordv6[data]}" == "$ip6_address" ] ; then
+        echov "Record >>AAAA<< already set to $ip6_address";
+        update_required_v6=false;
+      fi
+    
   fi
 
-  echov "* Updating record ${record[name]}.$do_domain to $ip_address";
-  set_record_ip "${record[id]}" "$ip_address";
-  if [ $? -ne 0 ] ; then
-    echov "Unable to update IP address";
-    exit 1;
+
+  if [ $update_required_v4 == true ] ; then
+    echov "* Updating record ${recordv4[name]}.$do_domain to $ip_address";
+    set_record_ip "${recordv4[id]}" "$ip_address";
+    if [ $? -ne 0 ] ; then
+      echov "Unable to update IPv4 address";
+      update_failed_v4=true;
+    fi
+  fi
+  if [ $update_required_v6 == true ] ; then
+    echov "* Updating record ${recordv6[name]}.$do_domain to $ip6_address";
+    set_record_ip "${recordv6[id]}" "$ip6_address";
+    if [ $? -ne 0 ] ; then
+      echov "Unable to update IPv6 address";
+      update_failed_v6=true;
+    fi
   fi
 fi
 
-echov "\n* IP Address successfully added/updated.\n\n" "";
+rm ${tmpfile};
+if [ -f ${tmpfile} ] ; then
+  echov "Could not remove temporary record file ${tmpfile}";
+fi
+
+if [ ${update_failed_v4}==true ] || [ ${update_failed_v6}==true ] ; then
+  exit 1;
+fi
+
+echov "\n* IP Address(es) successfully added/updated.\n\n" "";
+
 exit 0;
