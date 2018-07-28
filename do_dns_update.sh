@@ -94,7 +94,7 @@ get_external_ip()
 
 get_global_ip6()
 {
-  ip6_address="$(ip addr show $ip6_interface | grep 'inet6' | grep -v 'fe80' | awk '{ print $2}' | sed 's/\/.*$//')";
+  ip6_address="$(ip addr show $ip6_interface | grep 'inet6' | grep -v 'fe80' | grep -v 'fd00' | awk '{ print $2}' | sed 's/\/.*$//')";
   if [ -z "$ip6_address" ] ; then
     return 1;
   else
@@ -230,10 +230,10 @@ if [ $? -ne 0 ] ; then
       if [ $? -ne 0 ] ; then
         echov "Unable to add new IPv4 record";
       else
-	echov "Successfully added new IPv4 record";
+	      echov "Successfully added new IPv4 record";
         just_added=$((just_added+1));
-	just_added_v4=true;
-	update_required_v4=false;
+	      just_added_v4=true;
+	      update_required_v4=false;
       fi
     fi
 
@@ -242,10 +242,10 @@ if [ $? -ne 0 ] ; then
       if [ $? -ne 0 ] ; then
         echov "Unable to add new IPv6 record";
       else
-	echov "Successfully added new IPv6 record";
+	      echov "Successfully added new IPv6 record";
         just_added=$((just_added+1));
-	just_added_v6=true;
-	update_required_v6=false;
+	      just_added_v6=true;
+	      update_required_v6=false;
       fi
     fi
   fi
@@ -294,9 +294,10 @@ if [ -f ${tmpfile} ] ; then
 fi
 
 if [ ${update_failed_v4}==true ] || [ ${update_failed_v6}==true ] ; then
+  echov "* At least one IP address update failed";
   exit 1;
 fi
 
-echov "\n* IP Address(es) successfully added/updated.\n\n" "";
+echov "\n* IP address(es) successfully added/updated." "";
 
 exit 0;
