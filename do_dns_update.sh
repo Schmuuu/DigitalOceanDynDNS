@@ -5,6 +5,7 @@
 do_access_token="";
 ip6_interface="enp1s0";
 tmpfile="/tmp/digital_ocean_records_";
+storedIpAddresses="/tmp/digital_ocean_latest_ip_updates_"  # domain name and file extenstion .txt will be append down below
 verbose=true;
 curl_timeout="15";
 loop_max_records="50";
@@ -15,6 +16,7 @@ filename="$(basename $BASH_SOURCE)";
 ## END EDIT.
 
 update_only=false;
+ipAddressesToStore="";
 
 # get options.
 while getopts "ush" opt; do
@@ -59,6 +61,7 @@ if [ $# -lt 2 ] || [ -z "$do_record" ] || [ -z "$do_domain" ] ; then
 fi
 
 tmpfile="${tmpfile}${do_record}.txt";
+storedIpAddresses="${storedIpAddresses}${do_record}.txt"
 
 echov()
 {
@@ -188,20 +191,33 @@ echov "* Updating $do_record.$do_domain: $(date +"%Y-%m-%d %H:%M:%S")";
 echov "* Fetching external IP from: $url_ext_ip";
 get_external_ip;
 if [ $? -ne 0 ] ; then
-  echov "Unable to extract external IP address";
+  echo "! Unable to extract external IP address";
   exit 1;
 fi
 
 echov "* Fetching global IPv6 from interface: $ip6_interface";
 get_global_ip6 "$ip6_interface";
 if [ $? -ne 0 ] ; then
-  echov "Unable to extract global IPv6 address";
+  echo "! Unable to extract global IPv6 address";
   exit 1;
 fi
 
+
+if [[ -f ${storedIpAddresses} ]]; then
+  updatedAddressesFromFile=`cat $storedIpAddresses`
+  if [[ $updatedAddressesFromFile =~ $ip_address ]] && [[ $updatedAddressesFromFile =~ $ip6_address ]]; then
+    echov "* Current IP addresses have already been updated at Digital Ocean";
+    echov "* Nothing to do here. Exiting...";
+    exit 0;
+  fi
+else
+  echov "! There is no file storing the latest IP addresses updated with Digital Ocean!"
+fi
+
+
 touch ${tmpfile};
 if [ ! -f ${tmpfile} ] ; then
-  echov "Cannot create temporary record file! Exiting.";
+  echo "! Cannot create temporary record file! Exiting.";
   exit 1;
 fi
 
@@ -220,7 +236,7 @@ get_record;
 
 if [ $? -ne 0 ] ; then
   if [ $update_only == true ] ; then
-    echov "Unable to find requested record in Digital-Ocean account";
+    echov "! Unable to find requested record in Digital-Ocean account";
     update_required_v4=false;
     update_required_v6=false;
   else
@@ -228,24 +244,30 @@ if [ $? -ne 0 ] ; then
     if [ -z "${recordv4[id]}" ] ; then
       new_record "$ip_address" "A";
       if [ $? -ne 0 ] ; then
-        echov "Unable to add new IPv4 record";
+        echov "! Unable to add new IPv4 record";
       else
-	      echov "Successfully added new IPv4 record";
+	      echov "* Successfully added new IPv4 record";
         just_added=$((just_added+1));
 	      just_added_v4=true;
 	      update_required_v4=false;
+        if [ "$ipAddressesToStore" != "$ip_address"* ]; then
+          ipAddressesToStore="${ipAddressesToStore}${ip_address};"
+        fi
       fi
     fi
 
     if [ -z "${recordv6[id]}" ] ; then
       new_record "$ip6_address" "AAAA";
       if [ $? -ne 0 ] ; then
-        echov "Unable to add new IPv6 record";
+        echov "! Unable to add new IPv6 record";
       else
-	      echov "Successfully added new IPv6 record";
+	      echov "* Successfully added new IPv6 record";
         just_added=$((just_added+1));
 	      just_added_v6=true;
 	      update_required_v6=false;
+        if [ "$ipAddressesToStore" != "$ip6_address"* ]; then
+          ipAddressesToStore="${ipAddressesToStore}${ip6_address};"
+        fi
       fi
     fi
   fi
@@ -256,48 +278,65 @@ if [ $update_only == true ] || [ $just_added -le 1 ] ; then
   if [ $update_required_v4 == true ] && [ ! -z "${recordv4[id]}" ] && [[ "${recordv4[id]}" =~ ^[0-9]+$ ]]; then 
       echov "* Comparing >> ${recordv4[type]} | ${recordv4[data]} << to $ip_address";
       if [ "${recordv4[data]}" == "$ip_address" ] ; then
-        echov "Record >>A<< already set to $ip_address";
+        echov "* Record >>A<< already set to $ip_address";
         update_required_v4=false;
+        if [ "$ipAddressesToStore" != "$ip_address"* ]; then
+          ipAddressesToStore="${ipAddressesToStore}${ip_address};"
+        fi
       fi
   fi
   if [ $update_required_v6 == true ] && [ ! -z "${recordv6[id]}" ] && [[ "${recordv6[id]}" =~ ^[0-9]+$ ]]; then
       echov "* Comparing >> ${recordv6[type]} | ${recordv6[data]} << to $ip6_address";
       if [ "${recordv6[data]}" == "$ip6_address" ] ; then
-        echov "Record >>AAAA<< already set to $ip6_address";
+        echov "* Record >>AAAA<< already set to $ip6_address";
         update_required_v6=false;
+        if [ "$ipAddressesToStore" != "$ip6_address" ]; then
+          ipAddressesToStore="${ipAddressesToStore}${ip6_address};"
+        fi
       fi
-    
   fi
 
 
-  if [ $update_required_v4 == true ] ; then
+  if [ $update_required_v4 == true ]; then
     echov "* Updating record ${recordv4[name]}.$do_domain to $ip_address";
     set_record_ip "${recordv4[id]}" "$ip_address";
     if [ $? -ne 0 ] ; then
-      echov "Unable to update IPv4 address";
+      echov "! Unable to update IPv4 address";
       update_failed_v4=true;
+    elif [ "$ipAddressesToStore" != "$ip_address" ]; then
+      ipAddressesToStore="${ipAddressesToStore}${ip_address};"
     fi
   fi
-  if [ $update_required_v6 == true ] ; then
+  if [ $update_required_v6 == true ]; then
     echov "* Updating record ${recordv6[name]}.$do_domain to $ip6_address";
     set_record_ip "${recordv6[id]}" "$ip6_address";
     if [ $? -ne 0 ] ; then
-      echov "Unable to update IPv6 address";
+      echov "! Unable to update IPv6 address";
       update_failed_v6=true;
+    elif [ "$ipAddressesToStore" != "$ip6_address"* ]; then
+      ipAddressesToStore="${ipAddressesToStore}${ip6_address};"
     fi
   fi
 fi
 
-rm ${tmpfile};
-if [ -f ${tmpfile} ] ; then
-  echov "Could not remove temporary record file ${tmpfile}";
+touch $storedIpAddresses;
+if [[ ! -f ${storedIpAddresses} ]]; then
+  echo "! Cannot create file to store latest updated IP addresses!";
+else
+  echo "$ipAddressesToStore" > $storedIpAddresses;
 fi
 
-if [ ${update_failed_v4}==true ] || [ ${update_failed_v6}==true ] ; then
+
+rm ${tmpfile};
+if [[ -f ${tmpfile} ]]; then
+  echo "! Could not remove temporary record file ${tmpfile}";
+fi
+
+if [ ${update_failed_v4} == true ] || [ ${update_failed_v6} == true ] ; then
   echov "* At least one IP address update failed";
   exit 1;
 fi
 
-echov "\n* IP address(es) successfully added/updated." "";
+echov "\n* IP address(es) successfully added/updated when it where necessary.\n" "";
 
 exit 0;
