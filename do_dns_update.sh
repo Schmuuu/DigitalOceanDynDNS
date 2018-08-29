@@ -5,7 +5,7 @@
 do_access_token="";
 ip6_interface="enp1s0";
 tmpfile="/tmp/digital_ocean_records_";
-storedIpAddresses="/tmp/digital_ocean_latest_ip_updates_"  # domain name and file extenstion .txt will be append down below
+storedIpAddresses="/tmp/digital_ocean_latest_ip_updates_"  # domain name and file extenstion .txt will be appended down below
 verbose=true;
 curl_timeout="15";
 loop_max_records="50";
@@ -60,8 +60,13 @@ if [ $# -lt 2 ] || [ -z "$do_record" ] || [ -z "$do_domain" ] ; then
   exit 1;
 fi
 
-tmpfile="${tmpfile}${do_record}.txt";
-storedIpAddresses="${storedIpAddresses}${do_record}.txt"
+if [[ $do_record == "@" ]]; then
+  tmpfile="${tmpfile}${do_domain}.txt";
+  storedIpAddresses="${storedIpAddresses}${do_domain}.txt";
+else
+  tmpfile="${tmpfile}${do_record}.txt";
+  storedIpAddresses="${storedIpAddresses}${do_record}.txt";
+fi
 
 echov()
 {
