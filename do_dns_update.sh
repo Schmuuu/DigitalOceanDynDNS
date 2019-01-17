@@ -7,7 +7,7 @@ ip6_interface="enp1s0";
 tmpfile="/tmp/digital_ocean_records_";
 storedIpAddresses="/tmp/digital_ocean_latest_ip_updates_"  # domain name and file extenstion .txt will be appended down below
 verbose=true;
-curl_timeout="15";
+curl_timeout="90";
 loop_max_records="50";
 url_do_api="https://api.digitalocean.com/v2";
 url_ext_ip="http://ipv4.icanhazip.com";
@@ -17,6 +17,7 @@ filename="$(basename $BASH_SOURCE)";
 
 update_only=false;
 ipAddressesToStore="";
+
 
 # get options.
 while getopts "ush" opt; do
